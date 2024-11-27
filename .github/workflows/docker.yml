@@ -7,7 +7,6 @@ on:
 jobs:
   android:
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/mobile-ios'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -28,7 +27,7 @@ jobs:
         with:
           context: ./android
           push: true
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/ios-pwa-builder:latest
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/android-pwa-builder:latest
 
   ios:
     runs-on: ubuntu-latest
