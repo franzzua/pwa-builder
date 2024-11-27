@@ -43,7 +43,7 @@ jobs:
           dotnet-version: '8.0'
 
       - name: Build
-        working_directory: ./ios/PWABuilder.IOS.Cli
+        working-directory: ./ios/PWABuilder.IOS.Cli
         run: |
           dotnet publish -c Release -o ./bin/publish
           rm ./bin/publish/*.pdb
