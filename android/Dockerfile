@@ -9,6 +9,7 @@ RUN mkdir /usr/lib/android/licenses \
 RUN bubblewrap updateConfig --jdk-path /usr/lib/jvm/java-11-openjdk-amd64 --androidSdkPath /usr/lib/android
 
 RUN /usr/lib/android/tools/bin/sdkmanager --install "build-tools;34.0.0" --sdk_root="/usr/lib/android"
+RUN /usr/lib/android/tools/bin/sdkmanager --install "platforms;android-34" --sdk_root="/usr/lib/android"
 
 ENV BUBBLEWRAP_KEYSTORE_PASSWORD=password
 ENV BUBBLEWRAP_KEY_PASSWORD=password
