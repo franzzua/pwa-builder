@@ -2,7 +2,7 @@ name: Publish Docker
 
 on:
   push:
-    branches: [ main, ios ]
+    branches: [ main, ios, android ]
 
 jobs:
   android:
