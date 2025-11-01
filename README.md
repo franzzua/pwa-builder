@@ -27,7 +27,7 @@ It gets last version from google play, increments it, generates new .aab bundle 
 
 [Docker](./ios/PWABuilder.IOS.Cli/Dockerfile) contains C# app that takes config.json and produces Swift app based on it.
 * TODO: download manifest.json and use vars from it
-* Copy example [config.json](./ios/PWABuilder.IOS.Cli/config.json) and modify it to use
+* Copy example [config.json](https://github.com/franzzua/pwabuilder-ios-cli/blob/main/PWABuilder.IOS.Cli/config.json) and modify it to use
 * `docker run fransuane/ios-pwa-builder -v ./config.json:/app/config.json -v ./out:/out`
 
 ### Publish
