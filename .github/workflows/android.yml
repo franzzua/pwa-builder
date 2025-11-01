@@ -1,0 +1,93 @@
+name: Build Android
+
+on:
+  workflow_call:
+    inputs:
+      app_id:
+        required: true
+        type: string
+      domain:
+        required: true
+        type: string
+      play_service_account:
+        required: true
+        type: string
+      dockerhub_username:
+        default: fransuane
+        type: string
+      android_keystore_password:
+        required: true
+        type: string
+      android_key_password:
+        required: true
+        type: string
+      android_keystore_base64:
+        required: true
+        type: string
+  workflow_dispatch:
+
+jobs:
+  getversion:
+    runs-on: ubuntu-latest
+    outputs:
+      version_code: ${{ steps.version_code.outputs.version_code }}
+    steps:
+      - name: Setup Google App Version CLI Tool
+        uses: inspire-labs-tms-tech/google-play-app-version-code-cli@latest
+        with:
+          version: latest # CLI version to use (defaults to `latest`
+
+      - name: get next version code
+        id: version_code
+        run: NEXT="$(google-app-version -p ${{ inputs.app_id }} -f \"$JSON\" next)" && echo "version_code=$(($NEXT+1))" >> $GITHUB_OUTPUT
+        env:
+          JSON: ${{ inputs.play_service_account }}
+
+  build:
+    runs-on: ubuntu-latest
+    needs: getversion
+    env:
+      version_code: ${{ needs.getversion.outputs.version_code }}
+    steps:
+      - name: decode keystore
+        run: echo '${{ inputs.android_keystore_base64 }}' | base64 --decode > ${{ runner.temp }}/android.keystore
+
+      - name: build apps
+        run: |
+          docker run ${{ inputs.dockerhub_username }}/android-pwa-builder \
+            -e BUBBLEWRAP_KEYSTORE_PASSWORD='${{ inputs.android_keystore_password }}' \
+            -e BUBBLEWRAP_KEY_PASSWORD='${{ inputs.android_key_password }}' \
+            -e TWA_VERSION_CODE='${{ env.twa_version_code }}' \
+            -e BUBBLEWRAP_KEYSTORE_PATH='/app/android.keystore' \
+            -v ${{ runner.temp }}/out:/out \
+            -v ${{ runner.temp }}/android.keystore:/app/android.keystore \
+            ${{ inputs.domain }}
+            
+
+      - name: Publish Android App
+        uses: actions/upload-artifact@v4
+        with:
+          name: AndroidApp
+          include-hidden-files: true
+          path: ${{ runner.temp }}/out
+
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: AndroidApp
+
+      - name: create service account
+        run: echo '${{ inputs.play_service_account }}' > ./service-account.json
+
+      - name: Upload App to Google Play Console
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJsonPlainText: ${{ inputs.play_service_account }}
+          packageName: ${{ inputs.app_id }}
+          releaseFiles: ./*.aab
+          track: internal
+          status: draft

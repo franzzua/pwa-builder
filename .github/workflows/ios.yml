@@ -1,0 +1,184 @@
+name: Build iOS
+
+on:
+  workflow_call:
+    inputs:
+      domain:
+        required: true
+        type: string
+      app_id:
+        required: true
+        type: string
+      bundle_id:
+        required: true
+        type: string
+      appstoreAPIKeyID:
+        required: true
+        type: string
+      appstoreAPIIssuer:
+        required: true
+        type: string
+      teamID:
+        required: true
+        type: string
+      projectName:
+        required: true
+        type: string
+      certificateBase64:
+        required: true
+        type: string
+      p12FilePassword:
+        required: true
+        type: string
+      provisionProfileBase64:
+        required: true
+        type: string
+      keychainPassword:
+        required: true
+        type: string
+      appstoreAPIKey:
+        required: true
+        type: string
+      mobileProvision:
+        required: true
+        type: string
+      provisioningProfileName:
+        required: true
+        type: string
+      googleOAuthClientId:
+        required: true
+        type: string
+      googleOAuthClientIdReversed:
+        required: true
+        type: string
+      app_config_base64:
+        required: true
+        type: string
+      dockerhub_username:
+        required: true
+        type: string
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: decode config.json
+      - run: echo '${{ inputs.app_config_base64 }}' | base64 --decode > ${{ runner.temp }}/config.json
+
+      - name: build apps
+        run: |
+          docker run ${{ inputs.dockerhub_username }}/ios-pwa-builder 
+            -v ${{ runner.temp }}/out:/out
+            -v ${{ runner.temp }}/config.json:/app/config.json
+      - name: Publish IOS App
+        uses: actions/upload-artifact@v4
+        with:
+          name: IOSApp
+          include-hidden-files: true
+          path: ${{ runner.temp }}/out
+
+  publish:
+    runs-on: macos-latest
+    needs: build
+    steps:
+      - name: Get App Store Version with AppStore Connect API
+        id: appstore_token
+        uses: franzzua/get-appstore-token@v1.6
+        with:
+          app-id: ${{ inputs.app_id }}
+          key-id: ${{ inputs.appstoreAPIKeyID }}
+          issuer-id: ${{ inputs.appstoreAPIIssuer }}
+          private-key-p8-base64: ${{ inputs.appstoreAPIKey }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: IOSApp
+
+      - name: Set Config
+        run: |
+          cat ./${{ inputs.projectName }}.xcodeproj/project.pbxproj \
+          | sed -e 's/%DEVELOPMENT_TEAM%/${{ inputs.teamID }}/g' \
+          | sed -e 's/%PROVISIONING_PROFILE_SPECIFIER%/${{ inputs.provisioningProfileName }}/g' \
+          | tee ./${{ inputs.projectName }}.xcodeproj/project.pbxproj > /dev/null 
+          
+          cat ./${{ inputs.projectName }}/Info.plist \
+          | sed -e 's/%GOOGLE_CLIENT_ID%/${{ inputs.googleOAuthClientId }}/g' \
+          | sed -e 's/%GOOGLE_CLIENT_ID_REVERSED%/${{ inputs.googleOAuthClientIdReversed }}/g' \
+          | tee ./${{ inputs.projectName }}/Info.plist > /dev/null 
+
+      - name: Install pod
+        run: pod install
+
+      - name: Clean Project
+        run: |
+          xcodebuild clean -workspace ${{ inputs.projectName }}.xcworkspace -scheme ${{ inputs.projectName }} -destination 'generic/platform=iOS'
+        shell: bash
+
+      - name: Install the Apple certificate and provisioning profile
+        run: |
+          # create variables
+          CERTIFICATE_PATH=$RUNNER_TEMP/build_certificate.p12
+          PP_PATH=$RUNNER_TEMP/build_pp.mobileprovision
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          
+          # import certificate and provisioning profile from secrets
+          echo -n "${{ inputs.certificateBase64 }}" | base64 --decode -o $CERTIFICATE_PATH
+          echo -n "${{ inputs.provisionProfileBase64 }}" | base64 --decode -o $PP_PATH
+          
+          # create temporary keychain
+          security create-keychain -p "${{ inputs.keychainPassword }}" $KEYCHAIN_PATH
+          security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
+          security unlock-keychain -p "${{ inputs.keychainPassword }}" $KEYCHAIN_PATH
+          
+          # import certificate to keychain
+          security import $CERTIFICATE_PATH -P "${{ inputs.p12FilePassword }}" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
+          security list-keychain -d user -s $KEYCHAIN_PATH
+          
+          # apply provisioning profile
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          cp $PP_PATH ~/Library/MobileDevice/Provisioning\ Profiles
+        shell: bash
+      - name: Clean Project
+        run: |
+          xcodebuild clean -workspace ${{ inputs.projectName }}.xcworkspace -scheme ${{ inputs.projectName }} -destination 'generic/platform=iOS' -configuration Release
+        shell: bash
+      - name: Build Project
+        run: |
+          xcodebuild build -workspace ${{ inputs.projectName }}.xcworkspace -scheme ${{ inputs.projectName }} -destination 'generic/platform=iOS' -allowProvisioningUpdates -configuration Release
+        shell: bash
+      - name: Archive Project
+        run: |
+          xcodebuild archive -workspace ${{ inputs.projectName }}.xcworkspace -scheme ${{ inputs.projectName }} -destination 'generic/platform=iOS' -archivePath ./build/archive/${{ inputs.projectName }}.xcarchive
+        shell: bash
+      - name: Import Data to Plist & Increase Build Number
+        env:
+          version: ${{ steps.appstore_token.outputs.version }}
+          appStoreVersion: ${{ steps.appstore_token.outputs.appStoreVersion }}
+        run: |
+          plutil -insert method -string app-store ./build/archive/${{ inputs.projectName }}.xcarchive/Info.plist
+          plutil -insert provisioningProfiles -json '{"${{ inputs.bundle_id }}":"${{ inputs.mobileProvision }}"}' ./build/archive/${{ inputs.projectName }}.xcarchive/Info.plist
+          echo New Version $version
+          echo New App Store Version $appStoreVersion
+          plutil -replace "ApplicationProperties.CFBundleVersion" -string "$version" ./build/archive/${{ inputs.projectName }}.xcarchive/Info.plist
+          plutil -replace "ApplicationProperties.CFBundleShortVersionString" -string "$appStoreVersion" ./build/archive/${{ inputs.projectName }}.xcarchive/Info.plist
+          plutil -p ./build/archive/${{ inputs.projectName }}.xcarchive/Info.plist
+        shell: bash
+      - name: Export Archive
+        run: |
+          xcodebuild -exportArchive -archivePath ./build/archive/${{ inputs.projectName }}.xcarchive -exportPath $RUNNER_TEMP/export -exportOptionsPlist ./build/archive/${{ inputs.projectName }}.xcarchive/Info.plist -configuration Release -allowProvisioningUpdates
+        shell: bash
+      - name: Authentication Keys Decode Step
+        run: |
+          mkdir -p ~/private_keys
+          echo -n "${{ inputs.appstoreAPIKey }}" | base64 --decode --o ~/private_keys/AuthKey_${{ inputs.appstoreAPIKeyID }}.p8
+          echo "Private Key has been implemented"
+        shell: bash
+      - name: Validate App
+        run: |
+          xcrun altool --validate-app -f /Users/runner/work/_temp/export/${{ inputs.projectName }}.ipa -t ios --apiKey ${{ inputs.appstoreAPIKeyID }} --apiIssuer ${{ inputs.appstoreAPIIssuer }} --show-progress --verbose --output-format json
+        shell: bash
+      - name: Upload App
+        run: |
+          xcrun altool --upload-app -f /Users/runner/work/_temp/export/${{ inputs.projectName }}.ipa -t ios --apiKey ${{ inputs.appstoreAPIKeyID }} --apiIssuer ${{ inputs.appstoreAPIIssuer }} --show-progress --verbose --output-format json
+        shell: bash
